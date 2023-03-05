@@ -9,8 +9,12 @@ use hal::{
     adc::{self, Adc, CommonAdc},
     serial::{self, Serial},
 };
+use libm::{sqrt, sqrtf};
 use panic_halt as _; // you can put a breakpoint on `rust_begin_unwind` to catch panics
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
+
+mod linalg;
+use linalg::Matrix;
 
 #[entry]
 fn main() -> ! {
@@ -85,23 +89,33 @@ fn main() -> ! {
     info!("Entering run-loop...");
 
     loop {
-        let adc1_channel1_counts: u16 = adc1.read(&mut adc1_channel1).unwrap();
-        let adc1_channel2_counts: u16 = adc1.read(&mut adc1_channel2).unwrap();
-        let adc1_channel4_counts: u16 = adc1.read(&mut adc1_channel4).unwrap();
-        let adc2_channel1_counts: u16 = adc2.read(&mut adc2_channel1).unwrap();
-        let adc2_channel2_counts: u16 = adc2.read(&mut adc2_channel2).unwrap();
-        let adc2_channel3_counts: u16 = adc2.read(&mut adc2_channel3).unwrap();
-        let adc2_channel4_counts: u16 = adc2.read(&mut adc2_channel4).unwrap();
+        // Inner sensor first, then counter clockwise from East-Northeast sensor
+        let sensor_vectors = Matrix::from([
+            [0.0, 0.0],
+            [sqrtf(3.0) / 2.0, 1.0 / 2.0],
+            [0.0, 1.0],
+            [-sqrtf(3.0) / 2.0, 1.0 / 2.0],
+            [-sqrtf(3.0) / 2.0, -1.0 / 2.0],
+            [0.0, -1.0],
+            [sqrtf(3.0) / 2.0, -1.0 / 2.0],
+        ]);
+        let sensor_readings: Matrix<f32, 7, 1> = Matrix::from([[
+            adc1.read(&mut adc1_channel1).unwrap(),
+            adc1.read(&mut adc1_channel2).unwrap(),
+            adc1.read(&mut adc1_channel4).unwrap(),
+            adc2.read(&mut adc2_channel1).unwrap(),
+            adc2.read(&mut adc2_channel2).unwrap(),
+            adc2.read(&mut adc2_channel3).unwrap(),
+            adc2.read(&mut adc2_channel4).unwrap(),
+        ]]);
+        // Compute and log the centroid of the incident intensity
+        let centroid = sensor_vectors * sensor_readings;
+        // TODO: Implement outlier detection and sanity checking
         write!(
             usart,
-            "Reporting counts\na1c1: {}\na1c2: {}\na1c4: {}\na2c1: {}\na2c2: {}\na2c3: {}\na2c4: {}\n",
-            adc1_channel1_counts,
-            adc1_channel2_counts,
-            adc1_channel4_counts,
-            adc2_channel1_counts,
-            adc2_channel2_counts,
-            adc2_channel3_counts,
-            adc2_channel4_counts,
+            "Intensity centroid:\n[{}\n {}]",
+            centroid[(0, 0)],
+            centroid[(1, 0)]
         )
         .unwrap();
     }
