@@ -78,7 +78,6 @@ fn main() -> ! {
         clocks,
         &mut rcc.apb1,
     );
-    usart.write_str("Test write").unwrap();
 
     loop {
         let adc1_channel1_counts: u16 = adc1.read(&mut adc1_channel1).unwrap();
