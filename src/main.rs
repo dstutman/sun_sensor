@@ -2,20 +2,23 @@
 #![no_main]
 
 use core::fmt::Write;
-
+use cortex_m_rt::entry;
+use defmt::{debug, error, info, trace, warn};
+use defmt_itm as _;
 use hal::{
     adc::{self, Adc, CommonAdc},
     serial::{self, Serial},
 };
 use panic_halt as _; // you can put a breakpoint on `rust_begin_unwind` to catch panics
-
-use cortex_m_rt::entry;
-
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
 
 #[entry]
 fn main() -> ! {
+    info!("Sun sensor starting...");
+
     let periphs = pac::Peripherals::take().unwrap();
+
+    debug!("Configuring peripherals...");
 
     let mut rcc = periphs.RCC.constrain();
     let mut flash = periphs.FLASH.constrain();
@@ -78,6 +81,8 @@ fn main() -> ! {
         clocks,
         &mut rcc.apb1,
     );
+
+    info!("Entering run-loop...");
 
     loop {
         let adc1_channel1_counts: u16 = adc1.read(&mut adc1_channel1).unwrap();
