@@ -1,0 +1,31 @@
+[default.probe]
+protocol = "Swd"
+
+[default.flashing]
+enabled = true
+restore_unwritten_bytes = false
+do_chip_erase = true
+
+[default.reset]
+enabled = true
+halt_afterwards = false
+
+[default.general]
+chip = "STM32F303K8T"
+chip_descriptions = []
+log_level = "INFO"
+connect_under_reset = true
+
+[default.rtt]
+enabled = true
+channels = [
+    { up = 0, name = "defmt_rtt", format = "Defmt" },
+]
+timeout = 3000
+show_timestamps = true
+log_enabled = false
+log_path = "./logs"
+
+[default.gdb]
+enabled = true
+gdb_connection_string = "127.0.0.1:1337"
