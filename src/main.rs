@@ -1,33 +1,41 @@
 #![no_std]
 #![no_main]
 
-use core::fmt::Write;
-use cortex_m_rt::entry;
+use core::sync::atomic::{AtomicU32, Ordering};
+use cortex_m::peripheral::syst::SystClkSource;
+use cortex_m_rt::{entry, exception};
 use defmt::{debug, error, info, trace, warn};
-use defmt_itm as _;
+use defmt_rtt as _;
 use hal::{
     adc::{self, Adc, CommonAdc},
     serial::{self, Serial},
 };
-use libm::{sqrt, sqrtf};
+use libm::sqrtf;
 use panic_halt as _; // you can put a breakpoint on `rust_begin_unwind` to catch panics
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
 
 mod linalg;
 use linalg::Matrix;
 
+static TIMEBASE: AtomicU32 = AtomicU32::new(0);
+
+#[exception]
+fn SysTick() {
+    TIMEBASE.fetch_add(1, Ordering::AcqRel);
+}
+
 #[entry]
 fn main() -> ! {
     info!("Sun sensor starting...");
 
-    let periphs = pac::Peripherals::take().unwrap();
+    let mut cp = pac::CorePeripherals::take().unwrap();
+    let dp = pac::Peripherals::take().unwrap();
 
     debug!("Configuring peripherals...");
 
-    let mut rcc = periphs.RCC.constrain();
-    let mut flash = periphs.FLASH.constrain();
-
     // Configure clocks
+    let mut rcc = dp.RCC.constrain();
+    let mut flash = dp.FLASH.constrain();
     let clocks = rcc
         .cfgr
         .use_pll()
@@ -36,8 +44,22 @@ fn main() -> ! {
         .pclk2(64.MHz())
         .freeze(&mut flash.acr);
 
+    // Set up a timebase
+    cp.SYST.set_clock_source(SystClkSource::External); // RCC feeds SysTick with (ahb_clock = 64 MHz)/8 = 8 MHz
+    cp.SYST.set_reload(8000); // Tick once per millisecond
+    cp.SYST.clear_current();
+    cp.SYST.enable_interrupt();
+    cp.SYST.enable_counter();
+
     // Split GPIO bank A for the ADC and USART
-    let mut gpioa = periphs.GPIOA.split(&mut rcc.ahb);
+    let mut gpioa = dp.GPIOA.split(&mut rcc.ahb);
+    let mut gpiob = dp.GPIOB.split(&mut rcc.ahb);
+    let mut yellow_led = gpiob
+        .pb4
+        .into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
+    let mut green_led = gpiob
+        .pb5
+        .into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
 
     // ADC setup
     // Pin configuration
@@ -52,16 +74,16 @@ fn main() -> ! {
     let mut adc2_channel4 = gpioa.pa7.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
 
     // Peripheral init
-    let adc_common = CommonAdc::new(periphs.ADC1_2, &clocks, &mut rcc.ahb);
+    let adc_common = CommonAdc::new(dp.ADC1_2, &clocks, &mut rcc.ahb);
     let mut adc1 = Adc::new(
-        periphs.ADC1,
+        dp.ADC1,
         adc::config::Config::default(),
         &clocks,
         &adc_common,
     )
     .into_oneshot();
     let mut adc2 = Adc::new(
-        periphs.ADC2,
+        dp.ADC2,
         adc::config::Config::default(),
         &clocks,
         &adc_common,
@@ -79,7 +101,7 @@ fn main() -> ! {
     );
 
     let mut usart = Serial::new(
-        periphs.USART2,
+        dp.USART2,
         usart_pins,
         serial::config::Config::default(),
         clocks,
@@ -88,7 +110,14 @@ fn main() -> ! {
 
     info!("Entering run-loop...");
 
+    let mut last_time = TIMEBASE.load(Ordering::SeqCst);
+
     loop {
+        if (TIMEBASE.load(Ordering::SeqCst) - last_time < 1000) {
+            continue;
+        }
+        last_time = TIMEBASE.load(Ordering::SeqCst);
+        yellow_led.toggle().unwrap();
         // Inner sensor first, then counter clockwise from East-Northeast sensor
         let sensor_vectors = Matrix::from([
             [0.0, 0.0],
@@ -111,12 +140,12 @@ fn main() -> ! {
         // Compute and log the centroid of the incident intensity
         let centroid = sensor_vectors * sensor_readings;
         // TODO: Implement outlier detection and sanity checking
-        write!(
-            usart,
-            "Intensity centroid:\n[{}\n {}]",
-            centroid[(0, 0)],
-            centroid[(1, 0)]
-        )
-        .unwrap();
+        //write!(
+        //    usart,
+        //    "Intensity centroid:\n[{}\n {}]",
+        //    centroid[(0, 0)],
+        //    centroid[(1, 0)]
+        //)
+        //.unwrap();
     }
 }
