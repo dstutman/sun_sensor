@@ -1,10 +1,7 @@
 #![no_std]
 #![no_main]
 
-use core::{
-    fmt::Write,
-    sync::atomic::{AtomicU32, Ordering},
-};
+use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
 use defmt;
@@ -13,9 +10,11 @@ use hal::{
     adc::{self, Adc, CommonAdc},
     serial::{self, Serial},
 };
-use libm::sqrtf;
+use nalgebra::SMatrix;
 use panic_halt as _; // you can put a breakpoint on `rust_begin_unwind` to catch panics
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
+
+use crate::attitude::AttitudePipeline;
 
 mod attitude;
 
@@ -56,11 +55,13 @@ fn main() -> ! {
     // Split GPIO bank A for the ADC and USART
     let mut gpioa = dp.GPIOA.split(&mut rcc.ahb);
     let mut gpiob = dp.GPIOB.split(&mut rcc.ahb);
+
+    // LED setup
+    let mut green_led = gpiob
+        .pb3
+        .into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
     let mut yellow_led = gpiob
         .pb4
-        .into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
-    let mut green_led = gpiob
-        .pb5
         .into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
 
     // ADC setup
@@ -113,6 +114,8 @@ fn main() -> ! {
     green_led.set_high().unwrap(); // Status OK
     defmt::info!("Entering run-loop...");
 
+    let attitude_pipeline = AttitudePipeline::new_filled_hexagon(1.0);
+
     let mut last_time = TIMEBASE.load(Ordering::SeqCst);
 
     loop {
@@ -120,18 +123,10 @@ fn main() -> ! {
             continue;
         }
         last_time = TIMEBASE.load(Ordering::SeqCst);
-        yellow_led.toggle().unwrap();
+        yellow_led.toggle().unwrap(); // Running
+
         // Inner sensor first, then counter clockwise from East-Northeast sensor
-        let sensor_vectors = Matrix::from([
-            [0.0, 0.0],
-            [sqrtf(3.0) / 2.0, 1.0 / 2.0],
-            [0.0, 1.0],
-            [-sqrtf(3.0) / 2.0, 1.0 / 2.0],
-            [-sqrtf(3.0) / 2.0, -1.0 / 2.0],
-            [0.0, -1.0],
-            [sqrtf(3.0) / 2.0, -1.0 / 2.0],
-        ]);
-        let sensor_readings: Matrix<f32, 7, 1> = Matrix::from([[
+        let readings = SMatrix::<f32, 7, 1>::from([[
             adc1.read(&mut adc1_channel1).unwrap(),
             adc1.read(&mut adc1_channel2).unwrap(),
             adc1.read(&mut adc1_channel4).unwrap(),
@@ -141,7 +136,7 @@ fn main() -> ! {
             adc2.read(&mut adc2_channel4).unwrap(),
         ]]);
         // Compute and log the centroid of the incident intensity
-        let centroid = sensor_vectors * sensor_readings;
+        // attitude_pipeline.update(readings);
         // TODO: Implement outlier detection and sanity checking
         //write!(
         //    usart,
