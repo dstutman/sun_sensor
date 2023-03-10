@@ -26,12 +26,12 @@ fn SysTick() {
 
 #[entry]
 fn main() -> ! {
-    info!("Sun sensor starting...");
+    defmt::info!("Sun sensor starting...");
 
     let mut cp = pac::CorePeripherals::take().unwrap();
     let dp = pac::Peripherals::take().unwrap();
 
-    debug!("Configuring peripherals...");
+    defmt::debug!("Configuring peripherals...");
 
     // Configure clocks
     let mut rcc = dp.RCC.constrain();
@@ -108,12 +108,13 @@ fn main() -> ! {
         &mut rcc.apb1,
     );
 
-    info!("Entering run-loop...");
+    green_led.set_high().unwrap(); // Status OK
+    defmt::info!("Entering run-loop...");
 
     let mut last_time = TIMEBASE.load(Ordering::SeqCst);
 
     loop {
-        if (TIMEBASE.load(Ordering::SeqCst) - last_time < 1000) {
+        if TIMEBASE.load(Ordering::SeqCst) - last_time < 1000 {
             continue;
         }
         last_time = TIMEBASE.load(Ordering::SeqCst);
