@@ -1,10 +1,13 @@
 #![no_std]
 #![no_main]
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::{
+    fmt::Write,
+    sync::atomic::{AtomicU32, Ordering},
+};
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
-use defmt::{debug, error, info, trace, warn};
+use defmt;
 use defmt_rtt as _;
 use hal::{
     adc::{self, Adc, CommonAdc},
@@ -14,8 +17,7 @@ use libm::sqrtf;
 use panic_halt as _; // you can put a breakpoint on `rust_begin_unwind` to catch panics
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
 
-mod linalg;
-use linalg::Matrix;
+mod attitude;
 
 static TIMEBASE: AtomicU32 = AtomicU32::new(0);
 
