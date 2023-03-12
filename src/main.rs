@@ -12,15 +12,20 @@ use hal::{
     serial::{self, Serial},
 };
 use nalgebra::SMatrix;
-use panic_halt as _; // you can put a breakpoint on `rust_begin_unwind` to catch panics
+use panic_probe as _;
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
-
-use crate::attitude::AttitudePipeline;
 
 mod attitude;
 mod lsm9ds1;
 
 use crate::{attitude::AttitudePipeline, lsm9ds1::Lsm9ds1};
+
+#[defmt::panic_handler]
+fn panic() -> ! {
+    cortex_m::asm::udf()
+}
+
+static TIMEBASE: AtomicU32 = AtomicU32::new(0); // NOTE: clients must handle counter overflow
 
 #[exception]
 fn SysTick() {
@@ -154,6 +159,16 @@ fn main() -> ! {
             adc2.read(&mut adc2_channel3).unwrap(),
             adc2.read(&mut adc2_channel4).unwrap(),
         ]]);
+        defmt::info!(
+            "\nADC0 Reading: {}\nADC1 Reading: {}\nADC2 Reading: {}\nADC3 Reading: {}\nADC4 Reading: {}\nADC5 Reading: {}\nADC6 Reading: {}",
+            readings[0],
+            readings[1],
+            readings[2],
+            readings[3],
+            readings[4],
+            readings[5],
+            readings[6],
+        );
         // Compute and log the centroid of the incident intensity
         // attitude_pipeline.update(readings);
         // TODO: Implement outlier detection and sanity checking
