@@ -22,7 +22,7 @@ use nalgebra::SMatrix;
 /// - Fn(f32) -> f32
 ///     - Argument 0 is the measured voltage at the divider in fraction of
 ///       full-scale
-pub const fn resistive_divider_inverse_embedder(
+pub const fn resistive_divider_inverse_embedding(
     paired_resistance: f32,
     alpha: f32,
     beta: f32,

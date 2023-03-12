@@ -163,7 +163,7 @@ fn main() -> ! {
             adc2.read(&mut adc2_channel4).unwrap(),
         ]]) / powf(2.0, 12.0);
         defmt::info!(
-            "\n---\nADC0 Reading : {}\nADC1 Reading : {}\nADC2 Reading : {}\nADC3 Reading : {}\nADC4 Reading : {}\nADC5 Reading : {}\nADC6 Reading : {}",
+            "\nADC0 Reading : {}\nADC1 Reading : {}\nADC2 Reading : {}\nADC3 Reading : {}\nADC4 Reading : {}\nADC5 Reading : {}\nADC6 Reading : {}",
             readings[0],
             readings[1],
             readings[2],
