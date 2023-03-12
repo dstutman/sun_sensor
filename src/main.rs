@@ -11,6 +11,7 @@ use hal::{
     i2c::I2c,
     serial::{self, Serial},
 };
+use libm::powf;
 use nalgebra::SMatrix;
 use panic_probe as _;
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
@@ -151,6 +152,7 @@ fn main() -> ! {
         yellow_led.toggle().unwrap(); // Running
 
         // Inner sensor first, then counter clockwise from East-Northeast sensor
+        // In fractional-full-scale (thus divison by 2^12).
         let readings = SMatrix::<f32, 7, 1>::from([[
             adc1.read(&mut adc1_channel1).unwrap(),
             adc1.read(&mut adc1_channel2).unwrap(),
@@ -159,7 +161,7 @@ fn main() -> ! {
             adc2.read(&mut adc2_channel2).unwrap(),
             adc2.read(&mut adc2_channel3).unwrap(),
             adc2.read(&mut adc2_channel4).unwrap(),
-        ]]);
+        ]]) / powf(2.0, 12.0);
         defmt::info!(
             "\n---\nADC0 Reading : {}\nADC1 Reading : {}\nADC2 Reading : {}\nADC3 Reading : {}\nADC4 Reading : {}\nADC5 Reading : {}\nADC6 Reading : {}",
             readings[0],
