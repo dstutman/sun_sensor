@@ -16,6 +16,7 @@ use panic_probe as _;
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
 
 mod attitude;
+mod inverse_embedding;
 mod lsm9ds1;
 
 use crate::{attitude::AttitudePipeline, lsm9ds1::Lsm9ds1};
