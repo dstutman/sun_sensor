@@ -161,7 +161,7 @@ fn main() -> ! {
             adc2.read(&mut adc2_channel4).unwrap(),
         ]]);
         defmt::info!(
-            "\nADC0 Reading: {}\nADC1 Reading: {}\nADC2 Reading: {}\nADC3 Reading: {}\nADC4 Reading: {}\nADC5 Reading: {}\nADC6 Reading: {}",
+            "\n---\nADC0 Reading : {}\nADC1 Reading : {}\nADC2 Reading : {}\nADC3 Reading : {}\nADC4 Reading : {}\nADC5 Reading : {}\nADC6 Reading : {}",
             readings[0],
             readings[1],
             readings[2],
@@ -170,15 +170,18 @@ fn main() -> ! {
             readings[5],
             readings[6],
         );
-        // Compute and log the centroid of the incident intensity
-        // attitude_pipeline.update(readings);
-        // TODO: Implement outlier detection and sanity checking
-        //write!(
-        //    usart,
-        //    "Intensity centroid:\n[{}\n {}]",
-        //    centroid[(0, 0)],
-        //    centroid[(1, 0)]
-        //)
-        //.unwrap();
+        // Log the data for calibration
+        use core::fmt::Write;
+        write!(
+            usart,
+            "\n---\nADC0 Reading : {}\nADC1 Reading : {}\nADC2 Reading : {}\nADC3 Reading : {}\nADC4 Reading : {}\nADC5 Reading : {}\nADC6 Reading : {}",
+            readings[0],
+            readings[1],
+            readings[2],
+            readings[3],
+            readings[4],
+            readings[5],
+            readings[6],
+        ).unwrap();
     }
 }
