@@ -6,6 +6,7 @@ name = "sun-sensor"
 version = "0.1.0"
 
 [dependencies]
+embedded-hal  = "0.2.3"
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"
 panic-halt = "0.2.0"
