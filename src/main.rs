@@ -136,12 +136,7 @@ fn main() -> ! {
         .into_af_open_drain(&mut gpiob.moder, &mut gpiob.otyper, &mut gpiob.afrl);
     // Peripheral init
     let i2c = I2c::new(dp.I2C1, (scl, sda), 400000.Hz(), clocks, &mut rcc.apb1);
-    let mut lsm9ds1 = Lsm9ds1::new(i2c, true, false);
-    if let Ok(true) = lsm9ds1.whoami_matches() {
-        defmt::info!("LSM9DS1 presence check : PASS")
-    } else {
-        defmt::warn!("LSM9DS1 presence check : FAIL")
-    }
+    let mut lsm9ds1 = Lsm9ds1::new(i2c, true, false).unwrap();
 
     green_led.set_high().unwrap(); // Status OK
     defmt::info!("Entering run-loop...");
@@ -226,5 +221,6 @@ fn main() -> ! {
         //    attitude_pipeline.current_estimate.unwrap().elevation * 180.0 / PI,
         //)
         //.unwrap();
+        defmt::info!("{}", lsm9ds1.read_accel().unwrap());
     }
 }

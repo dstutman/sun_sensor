@@ -38,20 +38,23 @@ pub const ADDR_OUTZHXL: u8 = 0x2D;
 
 impl<B: Read + Write + WriteRead> Lsm9ds1<B> {
     pub fn new(bus: B, sdo_ag: bool, sdo_m: bool) -> Result<Self> {
-        let mut lsm = Self {
+        let mut lsm9ds1 = Self {
             bus,
             ag_address: 0x6A | sdo_ag as u8,
             m_address: 0x1C | (sdo_m as u8) << 1,
         };
 
-        if !lsm.whoami_matches()? {
+        if let Ok(true) = lsm9ds1.whoami_matches() {
+            defmt::trace!("LSM9DS1 presence check : PASS");
+        } else {
+            defmt::warn!("LSM9DS1 presence check : FAIL");
             return Err(Lsm9ds1Error::DetectionFailed);
-        };
+        }
 
-        lsm.soft_reset()?;
-        lsm.configure()?;
+        lsm9ds1.soft_reset()?;
+        lsm9ds1.configure()?;
 
-        Ok(lsm)
+        Ok(lsm9ds1)
     }
 
     pub fn soft_reset(&mut self) -> Result<()> {
