@@ -41,7 +41,7 @@ impl<'a, const N: usize> InverseEmbeddingTable<'a, N> {
         }
     }
 
-    pub fn invert_embedding(&self, data: SMatrix<f32, 1, N>) -> SMatrix<f32, 1, N> {
-        data.map_with_location(|_, col, val| self.inverse_embeddings[col](val))
+    pub fn invert_embedding(&self, data: SMatrix<f32, N, 1>) -> SMatrix<f32, N, 1> {
+        data.map_with_location(|row, _, val| self.inverse_embeddings[row](val))
     }
 }
