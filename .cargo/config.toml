@@ -21,6 +21,7 @@ rustflags = [
   # "-C", "link-arg=-Wl,-Tlink.x",
   # "-C", "link-arg=-nostartfiles",
 
+  "-C", "linker=flip-link", # <- add this
   # Enable defmt logging
   "-C", "link-arg=-Tdefmt.x",
 ]
