@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use core::f32::consts::PI;
+use core::fmt::Write;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
@@ -20,7 +22,11 @@ mod attitude;
 mod inverse_embedding;
 mod lsm9ds1;
 
-use crate::{attitude::AttitudePipeline, lsm9ds1::Lsm9ds1};
+use crate::{
+    attitude::AttitudePipeline,
+    inverse_embedding::{resistive_divider_inverse_embedding, InverseEmbeddingTable},
+    lsm9ds1::Lsm9ds1,
+};
 
 #[defmt::panic_handler]
 fn panic() -> ! {
@@ -140,50 +146,85 @@ fn main() -> ! {
     green_led.set_high().unwrap(); // Status OK
     defmt::info!("Entering run-loop...");
 
-    let attitude_pipeline = AttitudePipeline::new_filled_hexagon(1.0);
+    let inverse_embedding = resistive_divider_inverse_embedding(6E3, 1.0, 0.0);
+    let mut attitude_pipeline = AttitudePipeline::new_filled_hexagon(
+        InverseEmbeddingTable::new([
+            &inverse_embedding,
+            &inverse_embedding,
+            &inverse_embedding,
+            &inverse_embedding,
+            &inverse_embedding,
+            &inverse_embedding,
+            &inverse_embedding,
+        ]),
+        1.0,
+    );
 
     let mut last_time = TIMEBASE.load(Ordering::SeqCst);
 
     loop {
-        if TIMEBASE.load(Ordering::SeqCst) - last_time < 1000 {
+        if TIMEBASE.load(Ordering::SeqCst) - last_time < 100 {
             continue;
         }
         last_time = TIMEBASE.load(Ordering::SeqCst);
         yellow_led.toggle().unwrap(); // Running
 
-        // Inner sensor first, then counter clockwise from East-Northeast sensor
+        // Inner sensor first, then counter clockwise from marked sensor
         // In fractional-full-scale (thus divison by 2^12).
-        let readings = SMatrix::<f32, 7, 1>::from([[
-            adc1.read(&mut adc1_channel1).unwrap(),
-            adc1.read(&mut adc1_channel2).unwrap(),
-            adc1.read(&mut adc1_channel4).unwrap(),
-            adc2.read(&mut adc2_channel1).unwrap(),
-            adc2.read(&mut adc2_channel2).unwrap(),
-            adc2.read(&mut adc2_channel3).unwrap(),
-            adc2.read(&mut adc2_channel4).unwrap(),
+        let samples = SMatrix::<f32, 7, 1>::from([[
+            adc2.read(&mut adc2_channel2).unwrap(), // A4
+            adc2.read(&mut adc2_channel1).unwrap(), // A3
+            adc2.read(&mut adc2_channel3).unwrap(), // A5
+            adc1.read(&mut adc1_channel2).unwrap(), // A1
+            adc1.read(&mut adc1_channel4).unwrap(), // A2
+            adc1.read(&mut adc1_channel1).unwrap(), // A0
+            adc2.read(&mut adc2_channel4).unwrap(), // A6
         ]]) / powf(2.0, 12.0);
+
+        attitude_pipeline.update(samples);
+
         defmt::info!(
             "\nADC0 Reading : {}\nADC1 Reading : {}\nADC2 Reading : {}\nADC3 Reading : {}\nADC4 Reading : {}\nADC5 Reading : {}\nADC6 Reading : {}",
-            readings[0],
-            readings[1],
-            readings[2],
-            readings[3],
-            readings[4],
-            readings[5],
-            readings[6],
+            samples[0],
+            samples[1],
+            samples[2],
+            samples[3],
+            samples[4],
+            samples[5],
+            samples[6],
         );
         // Log the data for calibration
-        use core::fmt::Write;
         write!(
             usart,
-            "\n---\nADC0 Reading : {}\nADC1 Reading : {}\nADC2 Reading : {}\nADC3 Reading : {}\nADC4 Reading : {}\nADC5 Reading : {}\nADC6 Reading : {}",
-            readings[0],
-            readings[1],
-            readings[2],
-            readings[3],
-            readings[4],
-            readings[5],
-            readings[6],
-        ).unwrap();
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            samples[0], samples[1], samples[2], samples[3], samples[4], samples[5], samples[6],
+        )
+        .unwrap();
+        //write!(
+        //    usart,
+        //    "\n---\nADC0 Reading : {}\nADC1 Reading : {}\nADC2 Reading : {}\nADC3 Reading : {}\nADC4 Reading : {}\nADC5 Reading : {}\nADC6 Reading : {}",
+        //    samples[0],
+        //    samples[1],
+        //    samples[2],
+        //    samples[3],
+        //    samples[4],
+        //    samples[5],
+        //    samples[6],
+        //).unwrap();
+
+        // Same for the results
+        defmt::info!(
+            "\nCurrent estimate : \n\tazimuth : {}\n\televation : {}",
+            attitude_pipeline.current_estimate.unwrap().azimuth * 180.0 / PI,
+            attitude_pipeline.current_estimate.unwrap().elevation * 180.0 / PI,
+        );
+
+        //write!(
+        //    usart,
+        //    "\nCurrent estimate : \n\tazimuth : {}\n\televation : {}",
+        //    attitude_pipeline.current_estimate.unwrap().azimuth * 180.0 / PI,
+        //    attitude_pipeline.current_estimate.unwrap().elevation * 180.0 / PI,
+        //)
+        //.unwrap();
     }
 }
