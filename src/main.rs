@@ -14,7 +14,8 @@ use hal::{
     serial::{self, Serial},
 };
 use libm::powf;
-use nalgebra::SMatrix;
+use lsm9ds1::CalibrationParameters;
+use nalgebra::{SMatrix, Vector3};
 use panic_probe as _;
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
 
@@ -22,6 +23,7 @@ mod attitude;
 mod inverse_embedding;
 mod lsm9ds1;
 
+use crate::lsm9ds1::CorrectedLsm9ds1;
 use crate::{
     attitude::AttitudePipeline,
     inverse_embedding::{resistive_divider_inverse_embedding, InverseEmbeddingTable},
@@ -136,7 +138,14 @@ fn main() -> ! {
         .into_af_open_drain(&mut gpiob.moder, &mut gpiob.otyper, &mut gpiob.afrl);
     // Peripheral init
     let i2c = I2c::new(dp.I2C1, (scl, sda), 400000.Hz(), clocks, &mut rcc.apb1);
-    let mut lsm9ds1 = Lsm9ds1::new(i2c, true, false).unwrap();
+    let mut lsm9ds1 = CorrectedLsm9ds1::new(
+        Lsm9ds1::new(i2c, true, true).unwrap(),
+        CalibrationParameters::new(
+            Vector3::new(-0.0440121, 0.03978766, 0.01647095),
+            Vector3::new(0.04544277, 0.03340622, 0.00087193),
+            Vector3::new(0.23530056, -0.3293044, -0.49914486),
+        ),
+    );
 
     green_led.set_high().unwrap(); // Status OK
     defmt::info!("Entering run-loop...");
@@ -156,14 +165,25 @@ fn main() -> ! {
     );
 
     let mut last_time = TIMEBASE.load(Ordering::SeqCst);
+    let mut last_log_time = TIMEBASE.load(Ordering::SeqCst);
 
     loop {
-        if TIMEBASE.load(Ordering::SeqCst) - last_time < 100 {
+        if TIMEBASE.load(Ordering::SeqCst) - last_time < 50 {
             continue;
         }
         last_time = TIMEBASE.load(Ordering::SeqCst);
-        yellow_led.toggle().unwrap(); // Running
 
+        if TIMEBASE.load(Ordering::SeqCst) - last_log_time > 5000 {
+            last_log_time = TIMEBASE.load(Ordering::SeqCst);
+            yellow_led.toggle().unwrap(); // Running
+
+            // Log current estimate
+            defmt::info!(
+                "\nCurrent estimate : \n\tazimuth : {}\n\televation : {}",
+                attitude_pipeline.current_estimate.unwrap().azimuth * 180.0 / PI,
+                attitude_pipeline.current_estimate.unwrap().elevation * 180.0 / PI,
+            );
+        }
         // Inner sensor first, then counter clockwise from marked sensor
         // In fractional-full-scale (thus divison by 2^12).
         let samples = SMatrix::<f32, 7, 1>::from([[
@@ -178,8 +198,27 @@ fn main() -> ! {
 
         attitude_pipeline.update(samples);
 
+        let acceleration = lsm9ds1.read_accel().unwrap();
+        let angular_rates = lsm9ds1.read_gyro().unwrap();
+        let magnetic_field = lsm9ds1.read_mag().unwrap();
+
+        // Log sensor readings
         defmt::info!(
-            "\nADC0 Reading : {}\nADC1 Reading : {}\nADC2 Reading : {}\nADC3 Reading : {}\nADC4 Reading : {}\nADC5 Reading : {}\nADC6 Reading : {}",
+            "\nAccelerometer x : {}, y : {}, z : {}\nGyroscope x : {}, y : {}, z : {}\nMagnetometer x : {}, y : {}, z : {}",
+            acceleration.x,
+            acceleration.y,
+            acceleration.z,
+            angular_rates.x,
+            angular_rates.y,
+            angular_rates.z,
+            magnetic_field.x,
+            magnetic_field.y,
+            magnetic_field.z
+        );
+        // Log the data for calibration
+        write!(
+            usart,
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             samples[0],
             samples[1],
             samples[2],
@@ -187,40 +226,16 @@ fn main() -> ! {
             samples[4],
             samples[5],
             samples[6],
-        );
-        // Log the data for calibration
-        write!(
-            usart,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-            samples[0], samples[1], samples[2], samples[3], samples[4], samples[5], samples[6],
+            acceleration.x,
+            acceleration.y,
+            acceleration.z,
+            angular_rates.x,
+            angular_rates.y,
+            angular_rates.z,
+            magnetic_field.x,
+            magnetic_field.y,
+            magnetic_field.z,
         )
         .unwrap();
-        //write!(
-        //    usart,
-        //    "\n---\nADC0 Reading : {}\nADC1 Reading : {}\nADC2 Reading : {}\nADC3 Reading : {}\nADC4 Reading : {}\nADC5 Reading : {}\nADC6 Reading : {}",
-        //    samples[0],
-        //    samples[1],
-        //    samples[2],
-        //    samples[3],
-        //    samples[4],
-        //    samples[5],
-        //    samples[6],
-        //).unwrap();
-
-        // Same for the results
-        defmt::info!(
-            "\nCurrent estimate : \n\tazimuth : {}\n\televation : {}",
-            attitude_pipeline.current_estimate.unwrap().azimuth * 180.0 / PI,
-            attitude_pipeline.current_estimate.unwrap().elevation * 180.0 / PI,
-        );
-
-        //write!(
-        //    usart,
-        //    "\nCurrent estimate : \n\tazimuth : {}\n\televation : {}",
-        //    attitude_pipeline.current_estimate.unwrap().azimuth * 180.0 / PI,
-        //    attitude_pipeline.current_estimate.unwrap().elevation * 180.0 / PI,
-        //)
-        //.unwrap();
-        defmt::info!("{}", lsm9ds1.read_accel().unwrap());
     }
 }
