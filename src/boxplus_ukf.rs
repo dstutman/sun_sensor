@@ -5,6 +5,9 @@ use core::ops::{Add, AddAssign, Sub};
 
 use nalgebra::{Matrix6, SMatrix, SVector, UnitQuaternion, Vector3, Vector6};
 
+// Maximum number of iterations for certain methods such as `mean` of `State` sigma points
+const MAX_ITERS: usize = 10;
+
 type ManifoldDelta = Vector6<f32>;
 
 trait ManifoldDeltaExt {
@@ -49,7 +52,7 @@ impl AddAssign<ManifoldDelta> for State {
 }
 
 impl Sub for State {
-    type Output = Self;
+    type Output = ManifoldDelta;
 
     fn sub(self, rhs: Self) -> Self::Output {
         unimplemented!()
@@ -115,7 +118,17 @@ impl<const N: usize> States for [State; N] {
     }
 
     fn mean(&self) -> State {
-        unimplemented!()
+        let mut x = self[0];
+
+        // TODO: Early termination
+        for _ in 0..MAX_ITERS {
+            x += 1.0 / self.len() as f32
+                * self
+                    .iter()
+                    .fold(ManifoldDelta::zeros(), |acc, s| acc + (*s - x));
+        }
+
+        x
     }
 
     fn covariance(&self) -> StateCovariance {
@@ -199,7 +212,17 @@ trait Observations {
 
 impl<const N: usize> Observations for [Observation; N] {
     fn mean(&self) -> Observation {
-        unimplemented!()
+        let mut x = self[0];
+
+        // TODO: Early termination
+        for _ in 0..MAX_ITERS {
+            x += 1.0 / self.len() as f32
+                * self
+                    .iter()
+                    .fold(Observation::zeros(), |acc, s| acc + (*s - x));
+        }
+
+        x
     }
 
     fn covariance(&self) -> ObservationCovariance {
