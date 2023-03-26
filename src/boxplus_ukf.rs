@@ -132,7 +132,13 @@ impl<const N: usize> States for [State; N] {
     }
 
     fn covariance(&self) -> StateCovariance {
-        unimplemented!()
+        let mut x = StateCovariance::zeros();
+
+        for state in self[1..].iter() {
+            x += (*state - self[0]) * (*state - self[0]).transpose();
+        }
+
+        1.0 / 2.0 * x
     }
 }
 
@@ -226,7 +232,13 @@ impl<const N: usize> Observations for [Observation; N] {
     }
 
     fn covariance(&self) -> ObservationCovariance {
-        unimplemented!()
+        let mut x = ObservationCovariance::zeros();
+
+        for observation in self[1..].iter() {
+            x += (*observation - self[0]) * (*observation - self[0]).transpose();
+        }
+
+        1.0 / 2.0 * x
     }
 }
 
