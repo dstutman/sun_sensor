@@ -15,16 +15,17 @@ use hal::{
 };
 use libm::powf;
 use lsm9ds1::CalibrationParameters;
-use nalgebra::{Matrix6, SMatrix, UnitQuaternion, Vector3};
+use nalgebra::{SMatrix, UnitVector3, Vector3};
 use panic_probe as _;
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
 
 mod attitude;
 mod boxplus_ukf;
+mod complementary_filter;
 mod inverse_embedding;
 mod lsm9ds1;
 
-use crate::boxplus_ukf::{BpUkf, Observation, State};
+use crate::complementary_filter::{ComplementaryFilter, SensorReading};
 use crate::lsm9ds1::CorrectedLsm9ds1;
 use crate::{
     attitude::AttitudePipeline,
@@ -37,6 +38,7 @@ fn panic() -> ! {
     cortex_m::asm::udf()
 }
 
+// In 1E-5 second ticks
 static TIMEBASE: AtomicU32 = AtomicU32::new(0); // NOTE: clients must handle counter overflow
 
 #[exception]
@@ -66,7 +68,7 @@ fn main() -> ! {
 
     // Set up a timebase
     cp.SYST.set_clock_source(SystClkSource::External); // RCC feeds SysTick with (ahb_clock = 64 MHz)/8 = 8 MHz
-    cp.SYST.set_reload(8000); // Tick once per millisecond
+    cp.SYST.set_reload(80); // Tick a hundred times per millisecond
     cp.SYST.clear_current();
     cp.SYST.enable_interrupt();
     cp.SYST.enable_counter();
@@ -125,7 +127,7 @@ fn main() -> ! {
     let mut usart = Serial::new(
         dp.USART2,
         usart_pins,
-        serial::config::Config::default(),
+        serial::config::Config::default().baudrate(2000000.Bd()),
         clocks,
         &mut rcc.apb1,
     );
@@ -166,32 +168,41 @@ fn main() -> ! {
         1.0,
     );
 
-    let mut estimator = BpUkf::new(
-        State::new(UnitQuaternion::default(), Vector3::zeros()),
-        Matrix6::identity() * 0.01,
-        SMatrix::identity() * 0.05,
-    );
+    //let mut estimator = BpUkf::new(
+    //    State::new(UnitQuaternion::default(), Vector3::zeros()),
+    //    SMatrix::from_diagonal(&SVector::from_column_slice(&[
+    //        powf(45.0 / 180.0 * PI, 2.0),
+    //        powf(45.0 / 180.0 * PI, 2.0),
+    //        powf(45.0 / 180.0 * PI, 2.0),
+    //        powf(2.0 * PI, 2.0),
+    //        powf(2.0 * PI, 2.0),
+    //        powf(2.0 * PI, 2.0),
+    //    ])),
+    //    SMatrix::from_diagonal(&SVector::from_column_slice(&[
+    //        100.0 * 2.51e-6,
+    //        100.0 * 2.00e-6,
+    //        100.0 * 1.61e-5,
+    //        100.0 * 1.00e-5,
+    //        100.0 * 5.55e-6,
+    //        100.0 * 2.167e-6,
+    //        100.0 * 0.007744,
+    //        100.0 * 0.07744,
+    //        100.0 * 0.07744,
+    //    ])),
+    //);
+
+    let mut estimator = ComplementaryFilter::new(0.1);
 
     let mut last_time = TIMEBASE.load(Ordering::SeqCst);
     let mut last_log_time = TIMEBASE.load(Ordering::SeqCst);
 
     loop {
-        if TIMEBASE.load(Ordering::SeqCst) - last_time < 50 {
+        let dt = 1E-5 * (TIMEBASE.load(Ordering::SeqCst) - last_time) as f32;
+        if dt < 10E-3 {
             continue;
         }
         last_time = TIMEBASE.load(Ordering::SeqCst);
 
-        if TIMEBASE.load(Ordering::SeqCst) - last_log_time > 5000 {
-            last_log_time = TIMEBASE.load(Ordering::SeqCst);
-            yellow_led.toggle().unwrap(); // Running
-
-            // Log current estimate
-            //defmt::info!(
-            //    "\nCurrent estimate : \n\tazimuth : {}\n\televation : {}",
-            //    attitude_pipeline.current_estimate.unwrap().azimuth * 180.0 / PI,
-            //    attitude_pipeline.current_estimate.unwrap().elevation * 180.0 / PI,
-            //);
-        }
         // Inner sensor first, then counter clockwise from marked sensor
         // In fractional-full-scale (thus divison by 2^12).
         let samples = SMatrix::<f32, 7, 1>::from([[
@@ -206,70 +217,95 @@ fn main() -> ! {
 
         attitude_pipeline.update(samples);
 
-        let acceleration = lsm9ds1.read_accel().unwrap();
+        let acceleration = lsm9ds1.read_accel().unwrap().normalize();
         let angular_rates = lsm9ds1.read_gyro().unwrap();
         // Temporarily lock headings to due north because I don't trust the mag cal yet
-        let magnetic_field = lsm9ds1.read_mag().unwrap().normalize();
-        let magnetic_field = Vector3::new(1.0, 0.0, 0.0);
+        // let magnetic_field = lsm9ds1.read_mag().unwrap().normalize();
+        // let magnetic_field = estimator.estimate.attitude * Vector3::new(1.0, 0.0, 0.0);
 
-        // Kinda sorta OK dt
-        estimator.update(50E-3);
-        estimator.correct(Observation::from_column_slice(&[
-            acceleration.x,
-            acceleration.y,
-            acceleration.z,
-            angular_rates.x,
-            angular_rates.y,
-            angular_rates.z,
-            magnetic_field.x,
-            magnetic_field.y,
-            magnetic_field.z,
-        ]));
-
-        // Log estimator mean
-        let est_quat = estimator.estimate.attitude.quaternion();
-        defmt::info!(
-            "\nEstimated state: w : {}, x : {}, y : {}, z : {}",
-            est_quat.w,
-            est_quat.i,
-            est_quat.j,
-            est_quat.k
+        estimator.update(
+            SensorReading::new(UnitVector3::new_unchecked(acceleration), angular_rates),
+            dt,
         );
 
+        // Log estimator mean
+        {
+            //let est_quat = estimator.estimate.attitude.quaternion();
+            //let est_rate = estimator.estimate.angular_rate;
+            defmt::info!(
+                "\nEstimated state:\n Pose : w : {}, x : {}, y : {}, z : {}",
+                estimator.estimate.w,
+                estimator.estimate.i,
+                estimator.estimate.j,
+                estimator.estimate.k,
+            );
+            write!(
+                usart,
+                "\nw{}wa{}ab{}bc{}c",
+                estimator.estimate.w,
+                estimator.estimate.i,
+                estimator.estimate.j,
+                estimator.estimate.k,
+            )
+            .unwrap();
+        }
+
         // Log sensor readings
-        // defmt::info!(
-        //     "\nAccelerometer x : {}, y : {}, z : {}\nGyroscope x : {}, y : {}, z : {}\nMagnetometer x : {}, y : {}, z : {}",
-        //     acceleration.x,
-        //     acceleration.y,
-        //     acceleration.z,
-        //     angular_rates.x,
-        //     angular_rates.y,
-        //     angular_rates.z,
-        //     magnetic_field.x,
-        //     magnetic_field.y,
-        //     magnetic_field.z
-        // );
-        // Log the data for calibration
-        write!(
-            usart,
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-            samples[0],
-            samples[1],
-            samples[2],
-            samples[3],
-            samples[4],
-            samples[5],
-            samples[6],
+        defmt::info!(
+            "\nAccelerometer x : {}, y : {}, z : {}\nGyroscope x : {}, y : {}, z : {}\n",
             acceleration.x,
             acceleration.y,
             acceleration.z,
             angular_rates.x,
             angular_rates.y,
             angular_rates.z,
-            magnetic_field.x,
-            magnetic_field.y,
-            magnetic_field.z,
-        )
-        .unwrap();
+        );
+
+        //estimator.update(dt);
+        //estimator.correct(Observation::from_column_slice(&[
+        //    acceleration.x,
+        //    acceleration.y,
+        //    acceleration.z,
+        //    angular_rates.x,
+        //    angular_rates.y,
+        //    angular_rates.z,
+        //    magnetic_field.x,
+        //    magnetic_field.y,
+        //    magnetic_field.z,
+        //]));
+
+        // Log the data for calibration
+        //write!(
+        //    usart,
+        //    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+        //    samples[0],
+        //    samples[1],
+        //    samples[2],
+        //    samples[3],
+        //    samples[4],
+        //    samples[5],
+        //    samples[6],
+        //    acceleration.x,
+        //    acceleration.y,
+        //    acceleration.z,
+        //    angular_rates.x,
+        //    angular_rates.y,
+        //    angular_rates.z,
+        //    magnetic_field.x,
+        //    magnetic_field.y,
+        //    magnetic_field.z,
+        //)
+        //.unwrap();
+        // PyTeapot
+        if TIMEBASE.load(Ordering::SeqCst) - last_log_time > 100 {
+            last_log_time = TIMEBASE.load(Ordering::SeqCst);
+            yellow_led.toggle().unwrap(); // Running
+                                          // Log current estimate
+                                          //defmt::info!(
+                                          //    "\nCurrent estimate : \n\tazimuth : {}\n\televation : {}",
+                                          //    attitude_pipeline.current_estimate.unwrap().azimuth * 180.0 / PI,
+                                          //    attitude_pipeline.current_estimate.unwrap().elevation * 180.0 / PI,
+                                          //);
+        }
     }
 }
