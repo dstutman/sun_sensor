@@ -10,7 +10,7 @@ use libm::atanf;
 use nalgebra::{Matrix6, SMatrix, SVector, UnitQuaternion, Vector3, Vector6};
 
 // Maximum number of iterations for certain methods such as `mean` of `State` sigma points
-const MAX_ITERS: usize = 10;
+const MAX_ITERS: usize = 25;
 
 type ManifoldDelta = Vector6<f32>;
 
@@ -129,6 +129,7 @@ impl<const N: usize> States for [State; N] {
         delta: ManifoldDelta,
         covariance: StateCovariance,
     ) {
+        defmt::trace!("Update with delta");
         // TODO: handle unwrap
         let cholesky = covariance.cholesky().unwrap().unpack();
 
@@ -298,7 +299,7 @@ impl BpUkf {
         for state in self.sigma_points.as_mut() {
             // Update the attitude, angular rate is unchanged
             // TODO: Fix this stupid dereferencing
-            *state = *state + ManifoldDelta::from_scaled_axis(state.angular_rate * dt);
+            *state = *state + ManifoldDelta::from_scaled_axis(-state.angular_rate * dt);
         }
 
         // Compute the new mean and covariance estimates from the sigma points
@@ -312,10 +313,6 @@ impl BpUkf {
         // reading arrives.
         self.sigma_points
             .update(self.estimate, self.estimate_covariance);
-
-        for state in self.sigma_points.as_mut() {
-            *state = *state + ManifoldDelta::from_scaled_axis(state.angular_rate * dt);
-        }
     }
 
     pub fn correct(&mut self, observation: Observation) {

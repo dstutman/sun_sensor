@@ -234,6 +234,7 @@ impl<B: Read + Write + WriteRead> CorrectedLsm9ds1<B> {
         self.lsm
             .read_mag()
             .map(|m| m - self.cal_params.mag_bias)
-            .map(|m| Matrix3::new(0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0) * m)
+            // TODO: FIXME
+            .map(|m| m.component_mul(&Vector3::new(-1.0, 1.0, -1.0)))
     }
 }
