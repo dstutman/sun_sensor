@@ -220,7 +220,7 @@ impl<B: Read + Write + WriteRead> CorrectedLsm9ds1<B> {
         self.lsm
             .read_accel()
             .map(|a| a - self.cal_params.accel_bias)
-            .map(|a| a.component_mul(&Vector3::new(1.0, 1.0, -1.0)))
+            .map(|a| a.component_mul(&Vector3::new(-1.0, -1.0, 1.0)))
     }
 
     pub fn read_gyro(&mut self) -> Result<Vector3<f32>> {

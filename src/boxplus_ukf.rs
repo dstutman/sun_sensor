@@ -114,12 +114,12 @@ trait States {
 impl<const N: usize> States for [State; N] {
     fn update(&mut self, mean: State, covariance: StateCovariance) {
         // TODO: handle unwrap
-        let cholesky = covariance.cholesky().unwrap().l();
+        let cholesky = covariance.cholesky().unwrap().unpack();
 
         self[0] = mean;
-        for i in 0..(self.len() / 2) {
-            self[i] = mean + cholesky.column(i).into();
-            self[i + self.len() / 2 - 1] = mean + -cholesky.column(i);
+        for i in 1..=(self.len() / 2) {
+            self[i] = mean + cholesky.column(i - 1).into();
+            self[i + self.len() / 2] = mean + -cholesky.column(i - 1);
         }
     }
 
@@ -130,15 +130,15 @@ impl<const N: usize> States for [State; N] {
         covariance: StateCovariance,
     ) {
         // TODO: handle unwrap
-        let cholesky = covariance.cholesky().unwrap().l();
+        let cholesky = covariance.cholesky().unwrap().unpack();
 
         self[0] = mean;
-        for i in 0..(self.len() / 2) {
+        for i in 1..=(self.len() / 2) {
             // NOTE: These parens are NOT superfluous.
             // They define the priority of box-plus composition.
             // DO NOT REMOVE THEM.
-            self[i] = mean + (delta + cholesky.column(i));
-            self[i + self.len() / 2 - 1] = mean + (delta + -cholesky.column(i));
+            self[i] = mean + (delta + cholesky.column(i - 1));
+            self[i + self.len() / 2] = mean + (delta + -cholesky.column(i - 1));
         }
     }
 
@@ -153,6 +153,7 @@ impl<const N: usize> States for [State; N] {
                     .fold(ManifoldDelta::zeros(), |acc, s| acc + (*s - x));
         }
 
+        x.attitude.renormalize_fast();
         x
     }
 
@@ -201,7 +202,7 @@ trait ObsevationExt {
 
 impl ObsevationExt for Observation {
     fn estimated_from(state: State) -> Self {
-        let acceleration = state.attitude * Vector3::new(0.0, 0.0, -1.0);
+        let acceleration = state.attitude * Vector3::new(0.0, 0.0, 1.0);
         let angular_rate = state.angular_rate;
         let magnetic_field = state.attitude * Vector3::new(1.0, 0.0, 0.0);
         SVector::from_column_slice(&[
@@ -302,6 +303,7 @@ impl BpUkf {
 
         // Compute the new mean and covariance estimates from the sigma points
         self.estimate = self.sigma_points.mean();
+        // TODO: dt, dt2, or sqrt(dt)?
         self.estimate_covariance = self.sigma_points.covariance() + self.process_covariance * dt;
 
         // Generate new sigma points
