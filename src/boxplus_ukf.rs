@@ -321,8 +321,14 @@ impl BpUkf {
         let estimated_observation = sigma_observations.mean();
         let observation_covariance = sigma_observations.covariance() + self.observation_covariance;
 
-        // TODO compute cross-variance
-        let cross_variance = SMatrix::<f32, 6, 9>::zeros();
+        let mut cross_variance = SMatrix::<f32, 6, 9>::zeros();
+
+        for i in 1..self.sigma_points.len() {
+            cross_variance += (self.sigma_points[i] - self.sigma_points[0])
+                * (sigma_observations[i] - sigma_observations[0]).transpose();
+        }
+        cross_variance *= 1.0 / 2.0;
+
         // TODO: handle unwrap
         let gain = cross_variance * observation_covariance.try_inverse().unwrap();
 
