@@ -15,14 +15,16 @@ use hal::{
 };
 use libm::powf;
 use lsm9ds1::CalibrationParameters;
-use nalgebra::{SMatrix, Vector3};
+use nalgebra::{Matrix6, SMatrix, UnitQuaternion, Vector3};
 use panic_probe as _;
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
 
 mod attitude;
+mod boxplus_ukf;
 mod inverse_embedding;
 mod lsm9ds1;
 
+use crate::boxplus_ukf::{BpUkf, Observation, State};
 use crate::lsm9ds1::CorrectedLsm9ds1;
 use crate::{
     attitude::AttitudePipeline,
@@ -164,6 +166,12 @@ fn main() -> ! {
         1.0,
     );
 
+    let mut estimator = BpUkf::new(
+        State::new(UnitQuaternion::default(), Vector3::zeros()),
+        Matrix6::identity() * 0.01,
+        SMatrix::identity() * 0.05,
+    );
+
     let mut last_time = TIMEBASE.load(Ordering::SeqCst);
     let mut last_log_time = TIMEBASE.load(Ordering::SeqCst);
 
@@ -178,11 +186,11 @@ fn main() -> ! {
             yellow_led.toggle().unwrap(); // Running
 
             // Log current estimate
-            defmt::info!(
-                "\nCurrent estimate : \n\tazimuth : {}\n\televation : {}",
-                attitude_pipeline.current_estimate.unwrap().azimuth * 180.0 / PI,
-                attitude_pipeline.current_estimate.unwrap().elevation * 180.0 / PI,
-            );
+            //defmt::info!(
+            //    "\nCurrent estimate : \n\tazimuth : {}\n\televation : {}",
+            //    attitude_pipeline.current_estimate.unwrap().azimuth * 180.0 / PI,
+            //    attitude_pipeline.current_estimate.unwrap().elevation * 180.0 / PI,
+            //);
         }
         // Inner sensor first, then counter clockwise from marked sensor
         // In fractional-full-scale (thus divison by 2^12).
@@ -200,11 +208,13 @@ fn main() -> ! {
 
         let acceleration = lsm9ds1.read_accel().unwrap();
         let angular_rates = lsm9ds1.read_gyro().unwrap();
-        let magnetic_field = lsm9ds1.read_mag().unwrap();
+        // Temporarily lock headings to due north because I don't trust the mag cal yet
+        let magnetic_field = lsm9ds1.read_mag().unwrap().normalize();
+        let magnetic_field = Vector3::new(1.0, 0.0, 0.0);
 
-        // Log sensor readings
-        defmt::info!(
-            "\nAccelerometer x : {}, y : {}, z : {}\nGyroscope x : {}, y : {}, z : {}\nMagnetometer x : {}, y : {}, z : {}",
+        // Kinda sorta OK dt
+        estimator.update(50E-3);
+        estimator.correct(Observation::from_column_slice(&[
             acceleration.x,
             acceleration.y,
             acceleration.z,
@@ -213,8 +223,32 @@ fn main() -> ! {
             angular_rates.z,
             magnetic_field.x,
             magnetic_field.y,
-            magnetic_field.z
+            magnetic_field.z,
+        ]));
+
+        // Log estimator mean
+        let est_quat = estimator.estimate.attitude.quaternion();
+        defmt::info!(
+            "\nEstimated state: w : {}, x : {}, y : {}, z : {}",
+            est_quat.w,
+            est_quat.i,
+            est_quat.j,
+            est_quat.k
         );
+
+        // Log sensor readings
+        // defmt::info!(
+        //     "\nAccelerometer x : {}, y : {}, z : {}\nGyroscope x : {}, y : {}, z : {}\nMagnetometer x : {}, y : {}, z : {}",
+        //     acceleration.x,
+        //     acceleration.y,
+        //     acceleration.z,
+        //     angular_rates.x,
+        //     angular_rates.y,
+        //     angular_rates.z,
+        //     magnetic_field.x,
+        //     magnetic_field.y,
+        //     magnetic_field.z
+        // );
         // Log the data for calibration
         write!(
             usart,

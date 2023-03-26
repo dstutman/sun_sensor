@@ -2,7 +2,7 @@
 //! Attitude is parameterized as a quaternion
 
 use core::{
-    f32::{consts::PI, EPSILON},
+    f32::{consts::PI, EPSILON, MAX},
     ops::{Add, AddAssign, Sub},
 };
 
@@ -31,10 +31,19 @@ impl ManifoldDeltaExt for ManifoldDelta {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct State {
     pub attitude: UnitQuaternion<f32>,
     pub angular_rate: Vector3<f32>,
+}
+
+impl State {
+    pub fn new(attitude: UnitQuaternion<f32>, angular_rate: Vector3<f32>) -> Self {
+        Self {
+            attitude,
+            angular_rate,
+        }
+    }
 }
 
 // Implement the box-plus operator for the state
@@ -89,7 +98,7 @@ impl Sub for State {
 pub type StateCovariance = Matrix6<f32>;
 
 /// Intuitively, the 1-sigma uncertainty
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct Uncertainty {
     pub attitude: UnitQuaternion<f32>,
     pub angular_rate: Vector3<f32>,
@@ -108,7 +117,7 @@ impl<const N: usize> States for [State; N] {
         let cholesky = covariance.cholesky().unwrap().l();
 
         self[0] = mean;
-        for i in 0..(self.len() - 1) {
+        for i in 0..(self.len() / 2) {
             self[i] = mean + cholesky.column(i).into();
             self[i + self.len() / 2 - 1] = mean + -cholesky.column(i);
         }
@@ -124,7 +133,7 @@ impl<const N: usize> States for [State; N] {
         let cholesky = covariance.cholesky().unwrap().l();
 
         self[0] = mean;
-        for i in 0..(self.len() - 1) {
+        for i in 0..(self.len() / 2) {
             // NOTE: These parens are NOT superfluous.
             // They define the priority of box-plus composition.
             // DO NOT REMOVE THEM.
@@ -263,12 +272,26 @@ pub struct BpUkf {
     process_covariance: StateCovariance,
     observation_covariance: ObservationCovariance,
     // Storing the sigma points and covariance saves a bunch of compute later
-    sigma_points: [State; 7 * 2 + 1],
+    sigma_points: [State; 6 * 2 + 1],
     estimate_covariance: StateCovariance,
 }
 
 // TODO: Guard against `correct` without `update`
 impl BpUkf {
+    pub fn new(
+        initial_estimate: State,
+        process_covariance: StateCovariance,
+        observation_covariance: ObservationCovariance,
+    ) -> Self {
+        Self {
+            estimate: initial_estimate,
+            process_covariance,
+            observation_covariance,
+            sigma_points: Default::default(),
+            estimate_covariance: StateCovariance::identity() * MAX / 2.0,
+        }
+    }
+
     pub fn update(&mut self, dt: f32) {
         // Propagate the existing sigma points
         for state in self.sigma_points.as_mut() {
