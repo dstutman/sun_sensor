@@ -1,8 +1,12 @@
 //! Implements attitude estimation using a UKF with box-plus algebra
 //! Attitude is parameterized as a quaternion
 
-use core::ops::{Add, AddAssign, Sub};
+use core::{
+    f32::{consts::PI, EPSILON},
+    ops::{Add, AddAssign, Sub},
+};
 
+use libm::atanf;
 use nalgebra::{Matrix6, SMatrix, SVector, UnitQuaternion, Vector3, Vector6};
 
 // Maximum number of iterations for certain methods such as `mean` of `State` sigma points
@@ -55,22 +59,34 @@ impl Sub for State {
     type Output = ManifoldDelta;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        unimplemented!()
+        fn log_bar(quaternion: UnitQuaternion<f32>) -> Vector3<f32> {
+            let raw_quat = quaternion.quaternion();
+            if raw_quat.w < 1E2 * EPSILON {
+                return PI / 2.0 * raw_quat.vector().normalize();
+            } else if raw_quat.vector().norm() < 1E2 * EPSILON {
+                return Vector3::zeros();
+            } else {
+                return atanf(raw_quat.vector().norm_squared() / raw_quat.w)
+                    * raw_quat.vector().normalize();
+            }
+        }
+
+        let quaternion_delta = 2.0 * log_bar(rhs.attitude.inverse() * self.attitude);
+        let omega_delta = self.angular_rate - rhs.angular_rate;
+
+        ManifoldDelta::new(
+            quaternion_delta[0],
+            quaternion_delta[1],
+            quaternion_delta[2],
+            omega_delta[0],
+            omega_delta[1],
+            omega_delta[2],
+        )
     }
 }
 
 /// Covariances are represented in manifold space
 pub type StateCovariance = Matrix6<f32>;
-
-trait StateCovarianceExt {
-    fn uncertainty(&self) -> Uncertainty;
-}
-
-impl StateCovarianceExt for StateCovariance {
-    fn uncertainty(&self) -> Uncertainty {
-        unimplemented!()
-    }
-}
 
 /// Intuitively, the 1-sigma uncertainty
 #[derive(Clone, Copy)]
@@ -244,7 +260,6 @@ impl<const N: usize> Observations for [Observation; N] {
 
 pub struct BpUkf {
     pub estimate: State,
-    pub uncertainty: Uncertainty,
     process_covariance: StateCovariance,
     observation_covariance: ObservationCovariance,
     // Storing the sigma points and covariance saves a bunch of compute later
@@ -276,9 +291,6 @@ impl BpUkf {
         for state in self.sigma_points.as_mut() {
             *state = *state + ManifoldDelta::from_scaled_axis(state.angular_rate * dt);
         }
-
-        // Use the covariance to update the user-facing uncertainty
-        self.uncertainty = self.estimate_covariance.uncertainty();
     }
 
     pub fn correct(&mut self, observation: Observation) {
@@ -301,6 +313,5 @@ impl BpUkf {
         // Compute and apply the final updates
         self.estimate = self.sigma_points.mean();
         self.estimate_covariance = self.sigma_points.covariance();
-        self.uncertainty = self.estimate_covariance.uncertainty();
     }
 }
