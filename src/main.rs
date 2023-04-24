@@ -13,19 +13,21 @@ use hal::{
     i2c::I2c,
     serial::{self, Serial},
 };
-use libm::powf;
+use libm::{powf, sqrtf};
 use lsm9ds1::CalibrationParameters;
-use nalgebra::{SMatrix, UnitVector3, Vector3};
+use nalgebra::{SMatrix, SVector, UnitQuaternion, UnitVector3, Vector3};
 use panic_probe as _;
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
 
 mod attitude;
 mod boxplus_ukf;
-mod complementary_filter;
+//mod complementary_filter;
+//mod estimator;
 mod inverse_embedding;
 mod lsm9ds1;
 
-use crate::complementary_filter::{ComplementaryFilter, SensorReading};
+use crate::boxplus_ukf::{BpUkf, Observation, ObsevationExt, State};
+//use crate::complementary_filter::ComplementaryFilter;
 use crate::lsm9ds1::CorrectedLsm9ds1;
 use crate::{
     attitude::AttitudePipeline,
@@ -151,6 +153,12 @@ fn main() -> ! {
         ),
     );
 
+    for _ in 0..100 {
+        _ = lsm9ds1.read_accel();
+        _ = lsm9ds1.read_gyro();
+        _ = lsm9ds1.read_mag();
+    }
+
     green_led.set_high().unwrap(); // Status OK
     defmt::info!("Entering run-loop...");
 
@@ -168,37 +176,30 @@ fn main() -> ! {
         1.0,
     );
 
-    //let mut estimator = BpUkf::new(
-    //    State::new(UnitQuaternion::default(), Vector3::zeros()),
-    //    SMatrix::from_diagonal(&SVector::from_column_slice(&[
-    //        powf(45.0 / 180.0 * PI, 2.0),
-    //        powf(45.0 / 180.0 * PI, 2.0),
-    //        powf(45.0 / 180.0 * PI, 2.0),
-    //        powf(2.0 * PI, 2.0),
-    //        powf(2.0 * PI, 2.0),
-    //        powf(2.0 * PI, 2.0),
-    //    ])),
-    //    SMatrix::from_diagonal(&SVector::from_column_slice(&[
-    //        100.0 * 2.51e-6,
-    //        100.0 * 2.00e-6,
-    //        100.0 * 1.61e-5,
-    //        100.0 * 1.00e-5,
-    //        100.0 * 5.55e-6,
-    //        100.0 * 2.167e-6,
-    //        100.0 * 0.007744,
-    //        100.0 * 0.07744,
-    //        100.0 * 0.07744,
-    //    ])),
-    //);
+    let mut estimator = BpUkf::new(
+        State::new(UnitQuaternion::default(), Vector3::zeros()),
+        SMatrix::from_diagonal(&SVector::from_column_slice(&[
+            powf(10.0 / 180.0 * PI, 2.0),
+            powf(10.0 / 180.0 * PI, 2.0),
+            powf(10.0 / 180.0 * PI, 2.0),
+            powf(2.0 * PI, 2.0),
+            powf(2.0 * PI, 2.0),
+            powf(2.0 * PI, 2.0),
+        ])),
+        SMatrix::from_diagonal(&SVector::from_column_slice(&[
+            2.51e-6, 2.00e-6, 1.61e-5, 1.00e-5, 5.55e-6,
+            2.167e-6, //0.007744, 0.07744, 0.07744,
+        ])),
+    );
 
-    let mut estimator = ComplementaryFilter::new(0.1);
+    //let mut estimator = ComplementaryFilter::new(0.1);
 
     let mut last_time = TIMEBASE.load(Ordering::SeqCst);
     let mut last_log_time = TIMEBASE.load(Ordering::SeqCst);
 
     loop {
         let dt = 1E-5 * (TIMEBASE.load(Ordering::SeqCst) - last_time) as f32;
-        if dt < 10E-3 {
+        if dt < 1E-2 {
             continue;
         }
         last_time = TIMEBASE.load(Ordering::SeqCst);
@@ -221,12 +222,19 @@ fn main() -> ! {
         let angular_rates = lsm9ds1.read_gyro().unwrap();
         // Temporarily lock headings to due north because I don't trust the mag cal yet
         // let magnetic_field = lsm9ds1.read_mag().unwrap().normalize();
-        // let magnetic_field = estimator.estimate.attitude * Vector3::new(1.0, 0.0, 0.0);
+        let magnetic_field = estimator.estimate.attitude * Vector3::new(0.0, 0.0, 0.0);
 
-        estimator.update(
-            SensorReading::new(UnitVector3::new_unchecked(acceleration), angular_rates),
-            dt,
-        );
+        //estimator.update(
+        //    SensorReading::new(UnitVector3::new_unchecked(acceleration), angular_rates),
+        //    dt,
+        //);
+
+        estimator.update(dt);
+        estimator.correct(SVector::from_measurements(
+            acceleration,
+            angular_rates,
+            magnetic_field,
+        ));
 
         // Log estimator mean
         {
@@ -234,20 +242,11 @@ fn main() -> ! {
             //let est_rate = estimator.estimate.angular_rate;
             defmt::info!(
                 "\nEstimated state:\n Pose : w : {}, x : {}, y : {}, z : {}",
-                estimator.estimate.w,
-                estimator.estimate.i,
-                estimator.estimate.j,
-                estimator.estimate.k,
+                estimator.estimate.attitude.w,
+                estimator.estimate.attitude.i,
+                estimator.estimate.attitude.j,
+                estimator.estimate.attitude.k,
             );
-            write!(
-                usart,
-                "\nw{}wa{}ab{}bc{}c",
-                estimator.estimate.w,
-                estimator.estimate.i,
-                estimator.estimate.j,
-                estimator.estimate.k,
-            )
-            .unwrap();
         }
 
         // Log sensor readings
@@ -297,7 +296,28 @@ fn main() -> ! {
         //)
         //.unwrap();
         // PyTeapot
-        if TIMEBASE.load(Ordering::SeqCst) - last_log_time > 100 {
+
+        defmt::info!(
+            "\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+            samples[0],
+            samples[1],
+            samples[2],
+            samples[3],
+            samples[4],
+            samples[5],
+            samples[6],
+        );
+
+        if TIMEBASE.load(Ordering::SeqCst) - last_log_time > 10000 {
+            write!(
+                usart,
+                "\nQuaternion:{},{},{},{}",
+                estimator.estimate.attitude.w,
+                estimator.estimate.attitude.i,
+                estimator.estimate.attitude.j,
+                estimator.estimate.attitude.k,
+            )
+            .unwrap();
             last_log_time = TIMEBASE.load(Ordering::SeqCst);
             yellow_led.toggle().unwrap(); // Running
                                           // Log current estimate

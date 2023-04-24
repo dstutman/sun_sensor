@@ -19,6 +19,7 @@ pub struct Lsm9ds1<B: Read + Write + WriteRead> {
 
 // General registers
 pub const ADDR_WHOAMI: u8 = 0x0F;
+pub const ADDR_CTRLREG7: u8 = 0x21;
 pub const ADDR_CTRLREG8: u8 = 0x22;
 pub const ADDR_CTRLREG1G: u8 = 0x10;
 pub const ADDR_CTRLREG6XL: u8 = 0x20;
@@ -91,6 +92,13 @@ impl<B: Read + Write + WriteRead> Lsm9ds1<B> {
                 &[ADDR_CTRLREG1G, 0b110u8 << 5 | 0b00u8 << 3 | 0b11u8],
             )
             .map_err(|_| Lsm9ds1Error::BusTransactionFailed)?;
+
+        //self.bus
+        //    .write(
+        //        self.ag_address,
+        //        &[ADDR_CTRLREG7, 0b1u8 << 7 | 0b11u8 << 5 | 0b1u8 << 2],
+        //    )
+        //    .map_err(|_| Lsm9ds1Error::BusTransactionFailed)?;
 
         self.bus
             .write(self.ag_address, &[ADDR_CTRLREG8, 0b1u8 << 6 | 0b1u8 << 2])

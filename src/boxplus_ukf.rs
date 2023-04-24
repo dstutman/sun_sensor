@@ -144,6 +144,8 @@ impl<const N: usize> States for [State; N] {
     }
 
     fn mean(&self) -> State {
+        //defmt::info!("Ran");
+        //
         let mut x = self[0];
 
         // TODO: Early termination
@@ -153,9 +155,17 @@ impl<const N: usize> States for [State; N] {
                     .iter()
                     .fold(ManifoldDelta::zeros(), |acc, s| acc + (*s - x));
         }
-
         x.attitude.renormalize_fast();
         x
+        //let mut x = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        //let mut a = Vector3::new(0.0, 0.0, 0.);
+        //
+        //for state in self {
+        //    x += state.attitude.quaternion();
+        //    a += state.angular_rate;
+        //}
+        //
+        //State::new(UnitQuaternion::from_quaternion(x), a / self.len() as f32)
     }
 
     fn covariance(&self) -> StateCovariance {
@@ -170,7 +180,7 @@ impl<const N: usize> States for [State; N] {
 }
 
 /// Covariances are represented in manifold space
-pub type ObservationCovariance = SMatrix<f32, 9, 9>;
+pub type ObservationCovariance = SMatrix<f32, 6, 6>;
 
 // Expected observations are:
 // - in a coordinate system as follows
@@ -190,9 +200,9 @@ pub type ObservationCovariance = SMatrix<f32, 9, 9>;
 // - mx
 // - my
 // - mz
-pub type Observation = SVector<f32, 9>;
+pub type Observation = SVector<f32, 6>;
 
-trait ObsevationExt {
+pub trait ObsevationExt {
     fn estimated_from(state: State) -> Self;
     fn from_measurements(
         acceleration: Vector3<f32>,
@@ -205,7 +215,7 @@ impl ObsevationExt for Observation {
     fn estimated_from(state: State) -> Self {
         let acceleration = state.attitude * Vector3::new(0.0, 0.0, 1.0);
         let angular_rate = state.angular_rate;
-        let magnetic_field = state.attitude * Vector3::new(1.0, 0.0, 0.0);
+        //let magnetic_field = state.attitude * Vector3::new(1.0, 0.0, 0.0);
         SVector::from_column_slice(&[
             acceleration.x,
             acceleration.y,
@@ -213,9 +223,9 @@ impl ObsevationExt for Observation {
             angular_rate.x,
             angular_rate.y,
             angular_rate.z,
-            magnetic_field.x,
-            magnetic_field.y,
-            magnetic_field.z,
+            //magnetic_field.x,
+            //magnetic_field.y,
+            //magnetic_field.z,
         ])
     }
 
@@ -256,6 +266,13 @@ impl<const N: usize> Observations for [Observation; N] {
         }
 
         x
+        //let mut x = SVector::<f32, 9>::zeros();
+        //
+        //for observation in self {
+        //    x += observation;
+        //}
+        //
+        //x / self.len() as f32
     }
 
     fn covariance(&self) -> ObservationCovariance {
@@ -317,10 +334,12 @@ impl BpUkf {
 
     pub fn correct(&mut self, observation: Observation) {
         let sigma_observations = self.sigma_points.map(|s| Observation::estimated_from(s));
+        // zEKF testing
         let estimated_observation = sigma_observations.mean();
+        let estimated_observation = SMatrix::estimated_from(self.estimate);
         let observation_covariance = sigma_observations.covariance() + self.observation_covariance;
 
-        let mut cross_variance = SMatrix::<f32, 6, 9>::zeros();
+        let mut cross_variance = SMatrix::<f32, 6, 6>::zeros();
 
         for i in 1..self.sigma_points.len() {
             cross_variance += (self.sigma_points[i] - self.sigma_points[0])

@@ -1,30 +1,10 @@
+use crate::estimator::{TimestampedAttitude, TimestampedReading, USecTimestamp};
 use nalgebra::{UnitQuaternion, UnitVector3, Vector3};
 
 #[derive(Clone, Copy, Debug)]
-pub struct SensorReading {
-    acceleration: UnitVector3<f32>,
-    rate: Vector3<f32>,
-}
-
-impl SensorReading {
-    pub fn new(acceleration: UnitVector3<f32>, rate: Vector3<f32>) -> Self {
-        Self { acceleration, rate }
-    }
-}
-
-impl Default for SensorReading {
-    fn default() -> Self {
-        SensorReading {
-            acceleration: UnitVector3::new_unchecked(Vector3::new(0.0, 0.0, 1.0)),
-            rate: Default::default(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
 pub struct ComplementaryFilter {
-    pub estimate: UnitQuaternion<f32>,
-    last_reading: SensorReading,
+    pub estimate: TimestampedAttitude,
+    last_reading: TimestampedReading,
     alpha: f32,
 }
 
@@ -37,7 +17,16 @@ impl ComplementaryFilter {
         }
     }
 
-    pub fn update(&mut self, reading: SensorReading, dt: f32) {
+    pub fn step(&mut self, time: USecTimestamp) {
+        self.estimate = TimestampedAttitude::new(
+            time,
+            UnitQuaternion::from_scaled_axis(
+                -self.last_reading.rate * (time - self.estimate.time).to_seconds(),
+            ) * self.estimate.attitude,
+        );
+    }
+
+    pub fn update(&mut self, reading: TimestampedReading) {
         let average_rate = (self.last_reading.rate + reading.rate) / 2.0;
         let propagated_state = UnitQuaternion::from_scaled_axis(-average_rate * dt) * self.estimate;
 
@@ -50,4 +39,10 @@ impl ComplementaryFilter {
         self.estimate = propagated_state.nlerp(&acceleration_state, self.alpha);
         self.last_reading = reading;
     }
+}
+
+trait Estimator {
+    fn predict(&mut self, dt: f32);
+    fn correct(&mut self, reading: SensorReading);
+    fn get_attitude(&self) -> UnitQuaternion<f32>;
 }

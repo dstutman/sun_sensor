@@ -12,11 +12,11 @@
             "request": "launch",
             "name": "Debug (stutil)",
             "servertype": "external",
-            "gdbTarget": "localhost:1337",
+            "gdbTarget": "localhost:4242",
             "cwd": "${workspaceRoot}",
             /*"preLaunchTask": "Cargo Build (debug)",*/
             "runToEntryPoint": "main",
-            "executable": "./target/thumbv7em-none-eabihf/debug/sun-sensor",
+            "executable": "./target/thumbv7em-none-eabihf/release/sun-sensor",
             /* Run `cargo build --example itm` and uncomment this line to run itm example */
             // "executable": "./target/thumbv7em-none-eabihf/debug/examples/itm",
             "device": "STM32F303K8",
