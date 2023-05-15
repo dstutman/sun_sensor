@@ -1,8 +1,6 @@
-use core::ops::Div;
-
 use defmt::info;
 use libm::powf;
-use nalgebra::{SMatrix, SVector, SimdPartialOrd};
+use nalgebra::{SMatrix, SVector};
 
 /// Maps from measured ADC values to abstract linear "scale" values
 /// *For a divider with the LDR at the top of the divider (nearest-Vdd)*
@@ -62,7 +60,7 @@ impl<const N: usize> SensorInverseEmbedding<N> {
     fn resistance_from_adc(adc_reading: f32) -> f32 {
         // Given Vadc = Vdd Rldr/(Rldr+Rfxd)
         // then Rldr = (Vdd/Vadc - 1) Rl
-        return 1E5 * (1.0 / adc_reading - 1.0); // Fixed resistor is 100 kR
+        1E5 * (1.0 / adc_reading - 1.0) // Fixed resistor is 100 kR
     }
 
     pub fn new(resistance_ranges: [(f32, f32); N]) -> Self {
@@ -75,19 +73,19 @@ impl<const N: usize> SensorInverseEmbedding<N> {
 
         let mut illuminations = SVector::<f32, N>::zeros();
 
-        for i in 0..scaled_reading.len() {
+        let resistances = scaled_reading.map(|e| Self::resistance_from_adc(e));
+
+        for i in 0..resistances.len() {
             let (min, max) = self.resistance_ranges[i];
 
-            info!("{}", Self::resistance_from_adc(scaled_reading[i]));
-
             // For now assume the LDR resistance is inversely proportional to the incident power
-            let sample = if scaled_reading[i] > max || scaled_reading[i] < min {
-                defmt::warn!("Clamped reading, was: {}", scaled_reading[i]);
-                scaled_reading[i].clamp(min, max)
+            let resistance = if resistances[i] > max || resistances[i] < min {
+                defmt::warn!("Clamped reading, was: {}", resistances[i]);
+                resistances[i].clamp(min, max)
             } else {
-                scaled_reading[i]
+                resistances[i]
             };
-            illuminations[i] = (max - Self::resistance_from_adc(sample)) / (max - min);
+            illuminations[i] = (max - resistance) / (max - min);
         }
 
         illuminations

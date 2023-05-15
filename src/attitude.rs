@@ -3,7 +3,7 @@ use core::f32::consts::PI;
 use libm::{acosf, atan2f};
 use nalgebra::{SMatrix, SVector};
 
-#[derive(Clone, Copy, defmt::Format)]
+#[derive(Clone, Copy, Debug, defmt::Format, serde::Serialize)]
 pub struct Attitude {
     pub azimuth: f32,
     pub elevation: f32,

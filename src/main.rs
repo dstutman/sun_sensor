@@ -1,10 +1,13 @@
 #![no_std]
 #![no_main]
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::{
+    fmt::Write,
+    sync::atomic::{AtomicU32, Ordering},
+};
 use cortex_m::peripheral::syst::SystClkSource;
 use cortex_m_rt::{entry, exception};
-use defmt;
+
 use defmt_rtt as _;
 use hal::{
     adc::{self, Adc, CommonAdc},
@@ -17,12 +20,16 @@ use stm32f3xx_hal::{self as hal, pac, prelude::*};
 
 mod attitude;
 mod bno055;
-mod fault_detector;
+mod faults;
 mod inverse_embedding;
 mod ldr_array;
+mod report;
 
 use crate::bno055::Bno055;
 use crate::inverse_embedding::SensorInverseEmbedding;
+
+// Choose a checksum algo
+const CRC_ALGO: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_8_SMBUS);
 
 #[defmt::panic_handler]
 fn panic() -> ! {
@@ -73,7 +80,7 @@ fn main() -> ! {
     let mut green_led = gpiob
         .pb3
         .into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
-    let mut yellow_led = gpiob
+    let _yellow_led = gpiob
         .pb4
         .into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
 
@@ -87,7 +94,7 @@ fn main() -> ! {
     let mut adc2_channel1 = gpioa.pa4.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
     let mut adc2_channel2 = gpioa.pa5.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
     let mut adc2_channel3 = gpioa.pa6.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
-    let mut adc2_channel4 = gpioa.pa7.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
+    let _adc2_channel4 = gpioa.pa7.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
 
     // Setup ADC
     let adc_common = CommonAdc::new(dp.ADC1_2, &clocks, &mut rcc.ahb);
@@ -143,16 +150,15 @@ fn main() -> ! {
     defmt::info!("Entering run-loop...");
 
     let inverse_embedding = SensorInverseEmbedding::new([
-        (5567.013095, 2.180124E5),
-        (28886.092920, 1.063636E6),
-        (12527.469362, 2.000733E5),
-        (17162.474828, 2.705480E6),
-        (5567.013095, 3.801876E6),
-        (21255.180764, 1.948000E6),
+        (5_567.013, 2.180124E5),
+        (28_886.094, 1.063636E6),
+        (12_527.47, 2.000733E5),
+        (17_162.475, 2.705_48E6),
+        (5_567.013, 3.801876E6),
+        (21_255.182, 1.948E6),
     ]);
 
     let mut last_time = TIMEBASE.load(Ordering::SeqCst);
-    let mut last_log_time = TIMEBASE.load(Ordering::SeqCst);
 
     loop {
         let dt = 1E-5 * (TIMEBASE.load(Ordering::SeqCst) - last_time) as f32;
@@ -160,6 +166,7 @@ fn main() -> ! {
             continue;
         }
         last_time = TIMEBASE.load(Ordering::SeqCst);
+        defmt::trace!("Loop iteration...");
 
         // Inner sensor first, then counter clockwise from marked sensor
         // In fractional-full-scale (thus divison by 2^12).
@@ -172,11 +179,22 @@ fn main() -> ! {
             adc2.read(&mut adc2_channel3).unwrap(), // A5
         ]]);
 
-        let faults = fault_detector::Faults::from_reading(reading);
+        defmt::info!(
+            "{}, {}, {}, {}, {}, {}",
+            reading[(0, 0)],
+            reading[(1, 0)],
+            reading[(2, 0)],
+            reading[(3, 0)],
+            reading[(4, 0)],
+            reading[(5, 0)]
+        );
+
+        let faults = faults::ArrayStatus::from_reading(reading);
 
         let sensor_illuminations = inverse_embedding.invert(reading);
 
         // Map the sensors to the faces
+        // If a faulty sensor has been detected, do not include it in the calculations
         let face_illuminations = SVector::<f32, 3>::new(
             (sensor_illuminations[(0, 0)] + sensor_illuminations[(1, 0)]) / 2.0,
             (sensor_illuminations[(4, 0)] + sensor_illuminations[(5, 0)]) / 2.0,
@@ -187,5 +205,25 @@ fn main() -> ! {
             SMatrix::<f32, 3, 3>::new(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
             face_illuminations,
         );
+
+        // Construct and send a report
+        let report = report::Report::new(
+            attitude,
+            imu.read_quaternion().unwrap(),
+            faults,
+            TIMEBASE.load(Ordering::SeqCst),
+        );
+
+        let mut buf = [0u8; 1024];
+
+        let size = serde_json_core::ser::to_slice(&report, &mut buf).unwrap();
+        let payload = &buf[..size];
+
+        let crc = CRC_ALGO.checksum(payload);
+        usart.bwrite_all(payload).unwrap();
+        usart.bflush().unwrap();
+        usart.write(crc).unwrap();
+        usart.write_char('\n').unwrap();
+        usart.bflush().unwrap();
     }
 }
