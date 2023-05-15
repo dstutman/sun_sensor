@@ -16,6 +16,7 @@ use hal::{
 };
 use nalgebra::{SMatrix, SVector};
 use panic_probe as _;
+use serde::Serialize;
 use stm32f3xx_hal::{self as hal, pac, prelude::*};
 
 mod attitude;
@@ -25,11 +26,17 @@ mod inverse_embedding;
 mod ldr_array;
 mod report;
 
-use crate::bno055::Bno055;
 use crate::inverse_embedding::SensorInverseEmbedding;
+use crate::{bno055::Bno055, faults::ChannelHealth};
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub enum DataStatus {
+    Ok,
+    Fault,
+}
 
 // Choose a checksum algo
-const CRC_ALGO: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_8_SMBUS);
+const CRC_ALGO: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_8_AUTOSAR);
 
 #[defmt::panic_handler]
 fn panic() -> ! {
@@ -85,6 +92,13 @@ fn main() -> ! {
         .into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
 
     // Configure IO pins
+    gpioa.pa0.internal_pull_up(&mut gpioa.pupdr, false);
+    gpioa.pa1.internal_pull_up(&mut gpioa.pupdr, false);
+    gpioa.pa3.internal_pull_up(&mut gpioa.pupdr, false);
+    gpioa.pa4.internal_pull_up(&mut gpioa.pupdr, false);
+    gpioa.pa5.internal_pull_up(&mut gpioa.pupdr, false);
+    gpioa.pa6.internal_pull_up(&mut gpioa.pupdr, false);
+    gpioa.pa7.internal_pull_up(&mut gpioa.pupdr, false);
     let mut adc1_channel1 = gpioa.pa0.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
     //let mut adc1_channel11 = gpiob.pb0.into_analog(&mut gpiob.moder, &mut gpiob.pupdr);
     let mut adc1_channel2 = gpioa.pa1.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
@@ -94,7 +108,6 @@ fn main() -> ! {
     let mut adc2_channel1 = gpioa.pa4.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
     let mut adc2_channel2 = gpioa.pa5.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
     let mut adc2_channel3 = gpioa.pa6.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
-    let _adc2_channel4 = gpioa.pa7.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
 
     // Setup ADC
     let adc_common = CommonAdc::new(dp.ADC1_2, &clocks, &mut rcc.ahb);
@@ -126,7 +139,9 @@ fn main() -> ! {
     let mut usart = Serial::new(
         dp.USART2,
         usart_pins,
-        serial::config::Config::default().baudrate(2000000.Bd()),
+        serial::config::Config::default()
+            .baudrate(2000000.Bd())
+            .parity(serial::config::Parity::Odd),
         clocks,
         &mut rcc.apb1,
     );
@@ -189,17 +204,41 @@ fn main() -> ! {
             reading[(5, 0)]
         );
 
-        let faults = faults::ArrayStatus::from_reading(reading);
+        let array_status = faults::ArrayStatus::from_reading(reading);
 
         let sensor_illuminations = inverse_embedding.invert(reading);
 
         // Map the sensors to the faces
         // If a faulty sensor has been detected, do not include it in the calculations
+        let statuses = array_status
+            .channels
+            .map(|s| (s == ChannelHealth::Ok) as usize as f32);
+
         let face_illuminations = SVector::<f32, 3>::new(
-            (sensor_illuminations[(0, 0)] + sensor_illuminations[(1, 0)]) / 2.0,
-            (sensor_illuminations[(4, 0)] + sensor_illuminations[(5, 0)]) / 2.0,
-            (sensor_illuminations[(2, 0)] + sensor_illuminations[(3, 0)]) / 2.0,
+            (sensor_illuminations[(0, 0)] * statuses[0]
+                + sensor_illuminations[(1, 0)] * statuses[1])
+                / (statuses[0] + statuses[1]),
+            (sensor_illuminations[(4, 0)] * statuses[4]
+                + sensor_illuminations[(5, 0)] * statuses[5])
+                / (statuses[4] + statuses[5]),
+            (sensor_illuminations[(2, 0)] * statuses[2]
+                + sensor_illuminations[(3, 0)] * statuses[3])
+                / (statuses[2] + statuses[3]),
         );
+
+        let data_status = if statuses
+            .chunks(2)
+            .map(|c| c.iter().any(|&e| e == 1.0))
+            .all(|e| e == true)
+        {
+            DataStatus::Ok
+        } else {
+            DataStatus::Fault
+        };
+
+        defmt::info!("{}", face_illuminations[(0, 0)]);
+        defmt::info!("{}", face_illuminations[(1, 0)]);
+        defmt::info!("{}", face_illuminations[(2, 0)]);
 
         let attitude = attitude::Attitude::from_illuminations(
             SMatrix::<f32, 3, 3>::new(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
@@ -208,9 +247,10 @@ fn main() -> ! {
 
         // Construct and send a report
         let report = report::Report::new(
+            data_status,
             attitude,
             imu.read_quaternion().unwrap(),
-            faults,
+            array_status,
             TIMEBASE.load(Ordering::SeqCst),
         );
 

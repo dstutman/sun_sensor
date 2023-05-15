@@ -1,15 +1,12 @@
-use embedded_hal::adc::Channel;
-use nalgebra::SVector;
-
 use crate::ldr_array;
 
-#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize, PartialEq)]
 pub enum ChannelFault {
     OpenCircuit,
     ShortCircuit,
 }
 
-#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize, PartialEq)]
 pub enum ChannelHealth {
     Ok,
     Fault(ChannelFault),
@@ -17,16 +14,17 @@ pub enum ChannelHealth {
 
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 pub struct ArrayStatus {
-    channels: [ChannelHealth; 6],
+    pub channels: [ChannelHealth; 6],
 }
 
 impl ArrayStatus {
     pub fn from_reading(readings: ldr_array::Reading<6>) -> Self {
         let mut iter = readings.iter().map(|&e| {
             if e == 0 {
-                ChannelHealth::Fault(ChannelFault::ShortCircuit)
-            } else if e == 4095 {
                 ChannelHealth::Fault(ChannelFault::OpenCircuit)
+            } else if e == 4095 {
+                // Approx, based on divider
+                ChannelHealth::Fault(ChannelFault::ShortCircuit)
             } else {
                 ChannelHealth::Ok
             }
