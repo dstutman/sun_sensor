@@ -36,7 +36,7 @@ pub enum DataStatus {
 }
 
 // Choose a checksum algo
-const CRC_ALGO: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_8_AUTOSAR);
+const CRC_ALGO: crc::Crc<u8> = crc::Crc::<u8>::new(&crc::CRC_8_CDMA2000);
 
 #[defmt::panic_handler]
 fn panic() -> ! {
@@ -92,13 +92,12 @@ fn main() -> ! {
         .into_push_pull_output(&mut gpiob.moder, &mut gpiob.otyper);
 
     // Configure IO pins
-    gpioa.pa0.internal_pull_up(&mut gpioa.pupdr, false);
-    gpioa.pa1.internal_pull_up(&mut gpioa.pupdr, false);
-    gpioa.pa3.internal_pull_up(&mut gpioa.pupdr, false);
-    gpioa.pa4.internal_pull_up(&mut gpioa.pupdr, false);
-    gpioa.pa5.internal_pull_up(&mut gpioa.pupdr, false);
-    gpioa.pa6.internal_pull_up(&mut gpioa.pupdr, false);
-    gpioa.pa7.internal_pull_up(&mut gpioa.pupdr, false);
+    gpioa.pa0.internal_pull_up(&mut gpioa.pupdr, true);
+    gpioa.pa1.internal_pull_up(&mut gpioa.pupdr, true);
+    gpioa.pa3.internal_pull_up(&mut gpioa.pupdr, true);
+    gpioa.pa4.internal_pull_up(&mut gpioa.pupdr, true);
+    gpioa.pa5.internal_pull_up(&mut gpioa.pupdr, true);
+    gpioa.pa6.internal_pull_up(&mut gpioa.pupdr, true);
     let mut adc1_channel1 = gpioa.pa0.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
     //let mut adc1_channel11 = gpiob.pb0.into_analog(&mut gpiob.moder, &mut gpiob.pupdr);
     let mut adc1_channel2 = gpioa.pa1.into_analog(&mut gpioa.moder, &mut gpioa.pupdr);
@@ -165,12 +164,12 @@ fn main() -> ! {
     defmt::info!("Entering run-loop...");
 
     let inverse_embedding = SensorInverseEmbedding::new([
+        (12_527.47, 2.000733E5),
+        (21_255.182, 1.948E6),
         (5_567.013, 2.180124E5),
         (28_886.094, 1.063636E6),
-        (12_527.47, 2.000733E5),
         (17_162.475, 2.705_48E6),
         (5_567.013, 3.801876E6),
-        (21_255.182, 1.948E6),
     ]);
 
     let mut last_time = TIMEBASE.load(Ordering::SeqCst);
@@ -186,12 +185,12 @@ fn main() -> ! {
         // Inner sensor first, then counter clockwise from marked sensor
         // In fractional-full-scale (thus divison by 2^12).
         let reading = SMatrix::<u16, 6, 1>::from([[
-            adc1.read(&mut adc1_channel1).unwrap(), // A0
-            adc1.read(&mut adc1_channel2).unwrap(), // A1
-            adc1.read(&mut adc1_channel4).unwrap(), // A2
-            adc2.read(&mut adc2_channel1).unwrap(), // A3
-            adc2.read(&mut adc2_channel2).unwrap(), // A4
-            adc2.read(&mut adc2_channel3).unwrap(), // A5
+            adc1.read(&mut adc1_channel1).unwrap(), // A0 // X
+            adc2.read(&mut adc2_channel1).unwrap(), // A3 // X
+            adc1.read(&mut adc1_channel4).unwrap(), // A2 // Y
+            adc2.read(&mut adc2_channel3).unwrap(), // A5 // Y
+            adc1.read(&mut adc1_channel2).unwrap(), // A1 // Z
+            adc2.read(&mut adc2_channel2).unwrap(), // A4 // Z
         ]]);
 
         defmt::info!(
@@ -214,16 +213,19 @@ fn main() -> ! {
             .channels
             .map(|s| (s == ChannelHealth::Ok) as usize as f32);
 
+        // X: Board face
+        // Y: Perpendicular face
+        // Z: Upper face
         let face_illuminations = SVector::<f32, 3>::new(
             (sensor_illuminations[(0, 0)] * statuses[0]
                 + sensor_illuminations[(1, 0)] * statuses[1])
                 / (statuses[0] + statuses[1]),
-            (sensor_illuminations[(4, 0)] * statuses[4]
-                + sensor_illuminations[(5, 0)] * statuses[5])
-                / (statuses[4] + statuses[5]),
             (sensor_illuminations[(2, 0)] * statuses[2]
                 + sensor_illuminations[(3, 0)] * statuses[3])
                 / (statuses[2] + statuses[3]),
+            (sensor_illuminations[(4, 0)] * statuses[4]
+                + sensor_illuminations[(5, 0)] * statuses[5])
+                / (statuses[4] + statuses[5]),
         );
 
         let data_status = if statuses
@@ -236,10 +238,6 @@ fn main() -> ! {
             DataStatus::Fault
         };
 
-        defmt::info!("{}", face_illuminations[(0, 0)]);
-        defmt::info!("{}", face_illuminations[(1, 0)]);
-        defmt::info!("{}", face_illuminations[(2, 0)]);
-
         let attitude = attitude::Attitude::from_illuminations(
             SMatrix::<f32, 3, 3>::new(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
             face_illuminations,
@@ -249,7 +247,7 @@ fn main() -> ! {
         let report = report::Report::new(
             data_status,
             attitude,
-            imu.read_quaternion().unwrap(),
+            imu.read_quaternion().map_or(None, |q| Some(q)),
             array_status,
             TIMEBASE.load(Ordering::SeqCst),
         );
@@ -258,6 +256,8 @@ fn main() -> ! {
 
         let size = serde_json_core::ser::to_slice(&report, &mut buf).unwrap();
         let payload = &buf[..size];
+
+        // Calculate and append the CRC
 
         let crc = CRC_ALGO.checksum(payload);
         usart.bwrite_all(payload).unwrap();

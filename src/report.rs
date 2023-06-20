@@ -10,7 +10,7 @@ use crate::{attitude::Attitude, faults::ArrayStatus, DataStatus};
 pub struct Report {
     pub data_status: DataStatus,
     pub ldr_attitude: Attitude,
-    pub imu_attitude: UnitQuaternion<f32>,
+    pub imu_attitude: Option<UnitQuaternion<f32>>,
     pub faults: ArrayStatus,
     pub timestamp: u32,
 }
@@ -19,7 +19,7 @@ impl Report {
     pub fn new(
         data_status: DataStatus,
         ldr_attitude: Attitude,
-        imu_attitude: UnitQuaternion<f32>,
+        imu_attitude: Option<UnitQuaternion<f32>>,
         faults: ArrayStatus,
         timestamp: u32,
     ) -> Self {
